@@ -18,9 +18,6 @@ button{padding:8px 12px;border-radius:6px;border:none;cursor:pointer}
 .btn-indigo{background:#7c3aed;color:white;}
 .controls{display:flex;gap:10px;align-items:center;margin-bottom:10px}
 .meta{margin-left:auto;color:#94a3b8;font-size:12px}
-.camera-wrap{position:relative;width:100%;height:400px;background:#000;border-radius:8px;overflow:hidden;margin-bottom:12px}
-video{width:100%;height:100%;object-fit:cover;}
-canvas.overlay{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;}
 .input-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
 input[type=text],input[type=number]{padding:6px 8px;border-radius:6px;border:1px solid #94a3b8;background:transparent;color:#fff}
 table{width:100%;border-collapse:collapse;margin-top:12px}
@@ -28,6 +25,7 @@ th,td{padding:8px;border-bottom:1px solid #94a3b8;font-size:13px}
 th{color:#94a3b8;font-weight:600}
 .remove{background:#ef4444;color:white;padding:4px 8px;border-radius:6px;border:none;cursor:pointer}
 .message{margin-bottom:8px;color:#94a3b8;font-size:13px}
+#reader{width:100%;max-width:640px;margin:0 auto 12px auto;}
 </style>
 </head>
 <body>
@@ -36,15 +34,13 @@ th{color:#94a3b8;font-weight:600}
 const { useEffect, useRef, useState } = React;
 
 function BarcodeInventory() {
-  const videoRef = useRef(null);
-  const overlayRef = useRef(null);
-  const [scanning,setScanning] = useState(false);
   const [lastBarcode,setLastBarcode] = useState("");
   const [articleId,setArticleId] = useState("");
   const [quantity,setQuantity] = useState(1);
   const [items,setItems] = useState([]);
   const [message,setMessage] = useState("");
   const html5QrRef = useRef(null);
+  const [scanning,setScanning] = useState(false);
 
   useEffect(()=>{
     startCamera();
@@ -52,29 +48,24 @@ function BarcodeInventory() {
   },[]);
 
   function startCamera(){
-    if(scanning)return;
-    const video = videoRef.current;
-    if(!video) return;
+    if(scanning) return;
     setScanning(true);
-
-    // html5-qrcode setup
-    html5QrRef.current = new Html5Qrcode(/* elementId unused */ "reader", false);
+    html5QrRef.current = new Html5Qrcode("reader", false);
     html5QrRef.current.start(
-      {facingMode:"environment"},
-      {fps:10, qrbox:250, experimentalFeatures:{useBarCodeDetectorIfSupported:true}},
+      { facingMode:"environment" },
+      { fps:10, qrbox:250 },
       decodedText=>{
         setLastBarcode(decodedText);
         stopCamera();
       },
       errorMessage=>{
-        // ignore scanning errors
+        // ignore minor scan errors
       }
     ).catch(err=>{
       console.error("Camera starten mislukt:", err);
       setMessage("Camera starten mislukt: "+err);
+      setScanning(false);
     });
-    // start draw overlay loop
-    requestAnimationFrame(drawOverlay);
   }
 
   function stopCamera(){
@@ -83,23 +74,6 @@ function BarcodeInventory() {
       html5QrRef.current.stop().catch(()=>{});
       html5QrRef.current=null;
     }
-  }
-
-  function drawOverlay(){
-    const overlay = overlayRef.current;
-    const video = videoRef.current;
-    if(!overlay || !video) return;
-    const ctx = overlay.getContext("2d");
-    overlay.width = video.videoWidth || video.clientWidth || 640;
-    overlay.height = video.videoHeight || video.clientHeight || 480;
-    ctx.clearRect(0,0,overlay.width,overlay.height);
-    ctx.strokeStyle="rgba(255,50,50,0.9)";
-    ctx.lineWidth=3;
-    ctx.beginPath();
-    ctx.moveTo(0, overlay.height*0.5);
-    ctx.lineTo(overlay.width, overlay.height*0.5);
-    ctx.stroke();
-    if(scanning) requestAnimationFrame(drawOverlay);
   }
 
   function confirmItem(){
@@ -134,13 +108,10 @@ function BarcodeInventory() {
       React.createElement("button",{onClick:downloadCSV,className:"btn-indigo"},"Download CSV"),
       React.createElement("div",{className:"meta"},scanning?"Camera actief":"Camera gestopt")
     ),
-    React.createElement("div",{className:"camera-wrap"},
-      React.createElement("video",{ref:videoRef,autoPlay:true,muted:true,playsInline:true}),
-      React.createElement("canvas",{ref:overlayRef,className:"overlay"})
-    ),
+    React.createElement("div",{id:"reader"}),
     React.createElement("div",{className:"input-row"},
       React.createElement("input",{type:"text",value:lastBarcode,onChange:e=>setLastBarcode(e.target.value),placeholder:"Barcode (manueel of scan)"}),
-      React.createElement("input",{id:"articleIdInput",type:"text",value:articleId,onChange:e=>setArticleId(e.target.value),placeholder:"Artikel ID"}),
+      React.createElement("input",{type:"text",value:articleId,onChange:e=>setArticleId(e.target.value),placeholder:"Artikel ID"}),
       React.createElement("input",{type:"number",value:quantity,onChange:e=>setQuantity(Number(e.target.value)),min:1}),
       React.createElement("button",{onClick:confirmItem},"Bevestig item")
     ),
