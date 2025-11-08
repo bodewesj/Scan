@@ -4,183 +4,88 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Barcode Inventarisatie</title>
-<!-- React via CDN -->
-<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/html5-qrcode/minified/html5-qrcode.min.js"></script>
 <style>
-  body{margin:0;font-family:Inter,sans-serif;background:#0f1724;color:#e6eef8;padding:16px;}
-  h1{margin-bottom:16px}
-  .app{max-width:900px;margin:0 auto;padding:16px;background:linear-gradient(180deg,#071025,#041122);border-radius:10px;}
-  button{padding:8px 12px;border-radius:6px;border:none;cursor:pointer}
-  .btn-green{background:#10b981;color:white;}
-  .btn-indigo{background:#7c3aed;color:white;}
-  .controls{display:flex;gap:10px;align-items:center;margin-bottom:10px}
-  .meta{margin-left:auto;color:#94a3b8;font-size:12px}
-  .camera-wrap{position:relative;width:100%;height:400px;background:#000;border-radius:8px;overflow:hidden;margin-bottom:12px}
-  video{width:100%;height:100%;object-fit:cover;}
-  canvas.overlay{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;}
-  .input-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
-  input[type=text],input[type=number]{padding:6px 8px;border-radius:6px;border:1px solid #94a3b8;background:transparent;color:#fff}
-  table{width:100%;border-collapse:collapse;margin-top:12px}
-  th,td{padding:8px;border-bottom:1px solid #94a3b8;font-size:13px}
-  th{color:#94a3b8;font-weight:600}
-  .remove{background:#ef4444;color:white;padding:4px 8px;border-radius:6px;border:none;cursor:pointer}
-  .message{margin-bottom:8px;color:#94a3b8;font-size:13px}
+body{font-family:sans-serif;background:#f0f4f8;padding:16px;}
+#reader{width:100%;max-width:500px;margin:0 auto;}
+.input-row{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;}
+input,button{padding:6px; border-radius:4px; border:1px solid #ccc;}
+table{margin-top:12px;width:100%;border-collapse:collapse;}
+th,td{border:1px solid #ccc;padding:6px;text-align:left;}
 </style>
 </head>
 <body>
-<div id="root"></div>
+
+<h1>Barcode Inventarisatie (Android-ready)</h1>
+
+<div id="reader"></div>
+
+<div class="input-row">
+<input id="barcode" placeholder="Barcode" readonly>
+<input id="articleId" placeholder="Artikel ID">
+<input id="quantity" type="number" value="1" min="1">
+<button id="confirmBtn">Bevestig item</button>
+<button id="downloadBtn">Download CSV</button>
+</div>
+
+<table id="itemsTable">
+<thead>
+<tr><th>Tijd</th><th>Barcode</th><th>Artikel ID</th><th>Aantal</th></tr>
+</thead>
+<tbody></tbody>
+</table>
+
 <script>
-const { useEffect, useRef, useState } = React;
+const items=[];
 
-function BarcodeInventory() {
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const overlayRef = useRef(null);
-  const [supported,setSupported] = useState(null);
-  const [scanning,setScanning] = useState(false);
-  const [lastBarcode,setLastBarcode] = useState("");
-  const [articleId,setArticleId] = useState("");
-  const [quantity,setQuantity] = useState(1);
-  const [items,setItems] = useState([]);
-  const [message,setMessage] = useState("");
-  const detectorRef = useRef(null);
-  const rafRef = useRef(null);
-  const streamRef = useRef(null);
-
-  useEffect(()=>{
-    if(window.BarcodeDetector){
-      setSupported(true);
-      const formats=["ean_13","ean_8","code_128","code_39","qr_code","upc_e","upc_a","itf"];
-      try{detectorRef.current=new BarcodeDetector({formats})}catch(e){detectorRef.current=new BarcodeDetector()}
-    } else {setSupported(false)}
-    return ()=>stopCamera()
-  },[]);
-
-  function startCamera(){
-    if(scanning)return;
-    setMessage("");
-    navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:1280},height:{ideal:720}},audio:false})
-      .then(stream=>{
-        streamRef.current=stream;
-        videoRef.current.srcObject=stream;
-        videoRef.current.setAttribute("playsinline","true");
-        videoRef.current.play();
-        setScanning(true);
-        setTimeout(()=>{if(detectorRef.current)tickDetect()},150)
-      })
-      .catch(err=>setMessage("Kon camera niet starten: "+err.message));
-  }
-
-  function stopCamera(){
-    setScanning(false);
-    if(rafRef.current){cancelAnimationFrame(rafRef.current);rafRef.current=null}
-    if(streamRef.current){streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null}
-  }
-
-  async function tickDetect(){
-    try{
-      if(!videoRef.current||!detectorRef.current||!scanning)return;
-      const video=videoRef.current;
-      if(video.readyState<HTMLMediaElement.HAVE_ENOUGH_DATA){rafRef.current=requestAnimationFrame(tickDetect);return}
-
-      const canvas=canvasRef.current;
-      const ctx=canvas.getContext("2d");
-      canvas.width=video.videoWidth||640;
-      canvas.height=video.videoHeight||480;
-      ctx.drawImage(video,0,0,canvas.width,canvas.height);
-
-      const overlay=overlayRef.current;
-      const octx=overlay.getContext("2d");
-      octx.clearRect(0,0,overlay.width,overlay.height);
-      // rode lijn midden
-      octx.strokeStyle="rgba(255,50,50,0.9)";
-      octx.lineWidth=3;
-      octx.beginPath();
-      const y=overlay.height*0.5;
-      octx.moveTo(0,y); octx.lineTo(overlay.width,y); octx.stroke();
-
-      let barcodes=[];
-      try{barcodes=await detectorRef.current.detect(canvas)}catch(e){console.warn(e)}
-      if(barcodes.length>0){
-        const bc=barcodes[0]; const raw=bc.rawValue||"";
-        if(bc.boundingBox){const b=bc.boundingBox;octx.strokeStyle="rgba(0,220,120,0.95)";octx.lineWidth=2;octx.strokeRect(b.x,b.y,b.width,b.height)}
-        if(raw&&raw!==lastBarcode){setLastBarcode(raw);setArticleId("");setQuantity(1);setMessage("Gescand: "+raw);stopCamera();setTimeout(()=>{const el=document.getElementById("articleIdInput");if(el)el.focus()},200)}
-      }
-    }catch(e){console.error(e)}
-    if(scanning)rafRef.current=requestAnimationFrame(tickDetect);
-  }
-
-  function confirmItem(){
-    if(!lastBarcode){setMessage("Geen barcode om te bevestigen.");return;}
-    const q=Number(quantity)||1;
-    const now=new Date();
-    const item={time:now.toISOString(),barcode:lastBarcode,articleId:(articleId||"").trim(),quantity:q};
-    setItems(prev=>[item,...prev]);
-    setLastBarcode(""); setArticleId(""); setQuantity(1); setMessage("Item toegevoegd");
-    if(supported)setTimeout(startCamera,350);
-  }
-
-  function downloadCSV(){
-    if(!items.length){setMessage("Geen items om te downloaden.");return;}
-    let filename=window.prompt("Bestandsnaam (zonder extensie)","inventaris");
-    if(filename===null)return;
-    filename=filename.trim()||"inventaris";
-    if(!filename.toLowerCase().endsWith(".csv"))filename+=".csv";
-    const header="time,barcode,articleId,quantity\n";
-    const rows=items.map(i=>`${i.time},${i.barcode},${i.articleId},${i.quantity}`).join("\n");
-    const blob=new Blob([header+rows],{type:"text/csv;charset=utf-8"});
-    const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
-    setMessage(`CSV gedownload (${filename})`);
-  }
-
-  function removeItem(i){setItems(prev=>prev.filter((_,idx)=>idx!==i))}
-  function updateItemField(i,f,v){setItems(prev=>{const c=[...prev];c[i]={...c[i],[f]:f==="quantity"?Number(v)||0:v};return c;})}
-
-  useEffect(()=>{
-    const overlay=overlayRef.current; const video=videoRef.current; if(!overlay||!video)return;
-    function sync(){overlay.width=video.videoWidth||video.clientWidth||640; overlay.height=video.videoHeight||video.clientHeight||480;}
-    const id=setInterval(sync,150); setTimeout(()=>clearInterval(id),2000); return ()=>clearInterval(id);
-  },[scanning]);
-
-  return React.createElement("div",{className:"app"},
-    React.createElement("h1",null,"Barcode Inventarisatie"),
-    React.createElement("div",{className:"controls"},
-      React.createElement("button",{onClick:()=>scanning?stopCamera():startCamera(),className:"btn-green"},scanning?"Stop camera":"Start camera"),
-      React.createElement("button",{onClick:downloadCSV,className:"btn-indigo"},"Download CSV"),
-      React.createElement("div",{className:"meta"},supported===null?"Controleer...":supported?"BarcodeDetector: ondersteund":"BarcodeDetector: niet ondersteund")
-    ),
-    React.createElement("div",{className:"camera-wrap"},
-      React.createElement("video",{ref:videoRef,playsInline:true}),
-      React.createElement("canvas",{ref:canvasRef,style:{display:"none"}}),
-      React.createElement("canvas",{ref:overlayRef,className:"overlay"})
-    ),
-    React.createElement("div",{className:"input-row"},
-      React.createElement("input",{type:"text",value:lastBarcode,onChange:e=>setLastBarcode(e.target.value),placeholder:"Barcode (manueel of scan)"}),
-      React.createElement("input",{id:"articleIdInput",type:"text",value:articleId,onChange:e=>setArticleId(e.target.value),placeholder:"Artikel ID"}),
-      React.createElement("input",{type:"number",value:quantity,onChange:e=>setQuantity(Number(e.target.value)),min:1}),
-      React.createElement("button",{onClick:confirmItem},"Bevestig item")
-    ),
-    message&&React.createElement("div",{className:"message"},message),
-    React.createElement("table",null,
-      React.createElement("thead",null,
-        React.createElement("tr",null,["Tijd","Barcode","Artikel ID","Aantal","Acties"].map(h=>React.createElement("th",{key:h},h)))
-      ),
-      React.createElement("tbody",null,
-        items.length===0?React.createElement("tr",null,React.createElement("td",{colSpan:5},"Geen items")):
-        items.map((it,i)=>React.createElement("tr",{key:i},
-          React.createElement("td",null,new Date(it.time).toLocaleString()),
-          React.createElement("td",null,it.barcode),
-          React.createElement("td",null,React.createElement("input",{value:it.articleId,onChange:e=>updateItemField(i,"articleId",e.target.value)})),
-          React.createElement("td",null,React.createElement("input",{type:"number",value:it.quantity,onChange:e=>updateItemField(i,"quantity",e.target.value)})),
-          React.createElement("td",null,React.createElement("button",{className:"remove",onClick:()=>removeItem(i)},"Verwijder"))
-        ))
-      )
-    )
-  );
+function updateTable(){
+  const tbody=document.querySelector("#itemsTable tbody");
+  tbody.innerHTML="";
+  items.forEach(i=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${new Date(i.time).toLocaleString()}</td><td>${i.barcode}</td><td>${i.articleId}</td><td>${i.quantity}</td>`;
+    tbody.appendChild(tr);
+  });
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(BarcodeInventory));
+document.getElementById("confirmBtn").addEventListener("click",()=>{
+  const bc=document.getElementById("barcode").value;
+  const aid=document.getElementById("articleId").value;
+  const q=document.getElementById("quantity").value||1;
+  if(!bc){alert("Geen barcode");return;}
+  items.push({time:new Date().toISOString(),barcode:bc,articleId:aid,quantity:q});
+  updateTable();
+  document.getElementById("barcode").value="";
+  document.getElementById("articleId").value="";
+  document.getElementById("quantity").value=1;
+});
+
+document.getElementById("downloadBtn").addEventListener("click",()=>{
+  if(items.length===0){alert("Geen items");return;}
+  let filename=prompt("Bestandsnaam","inventaris");
+  if(!filename) filename="inventaris";
+  if(!filename.endsWith(".csv")) filename+=".csv";
+  const header="time,barcode,articleId,quantity\n";
+  const rows=items.map(i=>`${i.time},${i.barcode},${i.articleId},${i.quantity}`).join("\n");
+  const blob=new Blob([header+rows],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=filename; a.click(); URL.revokeObjectURL(a.href);
+});
+
+// html5-qrcode setup
+const html5QrcodeScanner=new Html5Qrcode("reader");
+const config={fps:10,qrbox:250};
+
+html5QrcodeScanner.start(
+  { facingMode:"environment" },
+  config,
+  decodedText=>{
+    document.getElementById("barcode").value=decodedText;
+  },
+  errorMessage=>{
+    //console.log("scan error:", errorMessage);
+  }
+).catch(err=>console.error(err));
 </script>
+
 </body>
 </html>
