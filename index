@@ -1,0 +1,327 @@
+
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Barcode Inventarisatie</title>
+  <!-- React + ReactDOM -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <style>
+    :root{
+      --bg: #0f1724;
+      --card: #0b1220;
+      --muted: #94a3b8;
+      --accent: #06b6d4;
+      --accent-2: #7c3aed;
+      --soft: #111827;
+      --success: #10b981;
+      --danger: #ef4444;
+    }
+    *{box-sizing:border-box}
+    html,body,#root{height:100%}
+    body{
+      margin:0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+      background: linear-gradient(180deg,#071025 0%, #041122 100%);
+      color: #e6eef8;
+      -webkit-font-smoothing:antialiased;
+      -moz-osx-font-smoothing:grayscale;
+      padding:20px;
+    }
+    .app{
+      max-width:1100px;
+      margin:0 auto;
+      background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+      border:1px solid rgba(255,255,255,0.03);
+      border-radius:12px;
+      padding:18px;
+      box-shadow: 0 6px 30px rgba(2,6,23,0.6);
+    }
+    h1{margin:0 0 10px 0; font-size:20px; letter-spacing:0.2px}
+    .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+    .btn{
+      display:inline-flex;align-items:center;gap:8px;
+      padding:9px 12px;border-radius:10px;border:none;
+      cursor:pointer;font-weight:600;
+      box-shadow: 0 4px 12px rgba(2,6,23,0.5);
+    }
+    .btn:active{transform:translateY(1px)}
+    .btn-green{background:linear-gradient(180deg,var(--success), #059669); color:white}
+    .btn-indigo{background:linear-gradient(180deg,var(--accent-2), #5b21b6); color:white}
+    .btn-ghost{background:transparent;border:1px solid rgba(255,255,255,0.04); color:var(--muted)}
+    .meta{margin-left:auto;color:var(--muted); font-size:13px}
+    .camera-wrap{position:relative;border-radius:10px;overflow:hidden;background:#000;height:420px;display:flex;align-items:center;justify-content:center}
+    video{width:100%;height:100%;object-fit:cover;background:#000;display:block}
+    .overlay{
+      position:absolute;inset:0;pointer-events:none;display:flex;align-items:center;justify-content:center;
+      background: linear-gradient(180deg, rgba(0,0,0,0.0) 0%, rgba(0,0,0,0.35) 70%);
+    }
+    .input-row{display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap}
+    input[type="text"], input[type="number"]{
+      padding:10px 12px;border-radius:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.03);color:inherit;
+      min-width:120px;
+    }
+    input[type="number"]{width:110px}
+    .confirm-row{display:flex;gap:8px;align-items:center;margin-left:auto}
+    .message{margin-top:10px;color:var(--muted);font-size:13px}
+    table{width:100%;border-collapse:collapse;margin-top:16px;font-size:13px}
+    th,td{padding:10px 12px;text-align:left;border-bottom:1px solid rgba(255,255,255,0.03)}
+    thead th{font-weight:700;color:var(--muted);font-size:12px}
+    .small-muted{color:var(--muted);font-size:12px}
+    .pill{padding:6px 9px;border-radius:999px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.02)}
+    .action-btn{padding:6px 8px;border-radius:8px;border:none;cursor:pointer}
+    .remove{background:var(--danger);color:#fff}
+    .download-link{display:inline-block;margin-top:8px;color:var(--accent);text-decoration:underline;cursor:pointer}
+    @media (max-width:760px){
+      .camera-wrap{height:260px}
+      .meta{display:none}
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script>
+  const { useEffect, useRef, useState } = React;
+
+  function BarcodeInventory() {
+    const videoRef = useRef(null);
+    const canvasRef = useRef(null);
+    const [supported, setSupported] = useState(null);
+    const [scanning, setScanning] = useState(false);
+    const [lastBarcode, setLastBarcode] = useState("");
+    const [articleId, setArticleId] = useState("");
+    const [quantity, setQuantity] = useState(1);
+    const [items, setItems] = useState([]);
+    const [message, setMessage] = useState("");
+    const detectorRef = useRef(null);
+    const rafRef = useRef(null);
+    const streamRef = useRef(null);
+
+    useEffect(() => {
+      if (window.BarcodeDetector) {
+        setSupported(true);
+        const formats = ["ean_13", "ean_8", "code_128", "code_39", "qr_code", "upc_e", "upc_a", "itf"];
+        try {
+          detectorRef.current = new window.BarcodeDetector({ formats });
+        } catch (e) {
+          detectorRef.current = new window.BarcodeDetector();
+        }
+      } else {
+        setSupported(false);
+      }
+      return () => stopCamera();
+    }, []);
+
+    function startCamera() {
+      if (scanning) return;
+      setMessage("");
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false })
+        .then((stream) => {
+          streamRef.current = stream;
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            videoRef.current.setAttribute("playsinline", "true");
+            videoRef.current.play();
+          }
+          setScanning(true);
+          if (detectorRef.current) tickDetect();
+        })
+        .catch((err) => setMessage("Kon camera niet starten: " + err.message));
+    }
+
+    function stopCamera() {
+      setScanning(false);
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+    }
+
+    async function tickDetect() {
+      if (!videoRef.current || !detectorRef.current || !scanning) return;
+      try {
+        const video = videoRef.current;
+        if (video.readyState !== HTMLMediaElement.HAVE_ENOUGH_DATA) {
+          rafRef.current = requestAnimationFrame(tickDetect);
+          return;
+        }
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext("2d");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const imgBitmap = await createImageBitmap(canvas);
+        const barcodes = await detectorRef.current.detect(imgBitmap);
+        if (barcodes && barcodes.length) {
+          const raw = barcodes[0].rawValue || "";
+          if (raw && raw !== lastBarcode) {
+            setLastBarcode(raw);
+            setArticleId(""); // leeg zodat gebruiker kan invullen
+            setQuantity(1);
+            setMessage(`Gescand: ${raw}`);
+            stopCamera();
+            // focus op artikelId kort nadat camera stopt
+            setTimeout(() => {
+              const el = document.getElementById('articleIdInput');
+              if (el) el.focus();
+            }, 250);
+          }
+        }
+      } catch (e) {
+        console.error("detect error", e);
+        setMessage("Detectiefout: " + (e && e.message ? e.message : e));
+      }
+      if (scanning) rafRef.current = requestAnimationFrame(tickDetect);
+    }
+
+    function confirmItem() {
+      if (!lastBarcode) {
+        setMessage("Geen barcode om te bevestigen.");
+        return;
+      }
+      const q = Number(quantity) || 1;
+      const now = new Date();
+      const item = {
+        time: now.toISOString(),
+        barcode: lastBarcode,
+        articleId: (articleId || "").trim(),
+        quantity: q
+      };
+      setItems((prev) => [item, ...prev]);
+      setLastBarcode("");
+      setArticleId("");
+      setQuantity(1);
+      setMessage("Item toegevoegd");
+      if (supported) {
+        setTimeout(() => startCamera(), 350);
+      }
+    }
+
+    function downloadCSV() {
+      if (!items.length) {
+        setMessage("Er zijn geen items om te downloaden.");
+        return;
+      }
+      let filename = window.prompt("Bestandsnaam (zonder extensie):", "inventaris");
+      if (filename === null) return;
+      filename = filename.trim() || "inventaris";
+      if (!filename.toLowerCase().endsWith(".csv")) filename = filename + ".csv";
+
+      const header = "time,barcode,articleId,quantity\\n";
+      const rows = items
+        .map(i => `${escapeCsv(i.time)},${escapeCsv(i.barcode)},${escapeCsv(i.articleId)},${escapeCsv(String(i.quantity))}`)
+        .join("\\n");
+      const blob = new Blob([header + rows], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setMessage(`CSV gedownload (${filename})`);
+    }
+
+    function escapeCsv(value) {
+      if (value == null) return "";
+      const v = String(value);
+      if (v.includes(",") || v.includes('"') || v.includes("\\n")) {
+        return '"' + v.replace(/"/g, '""') + '"';
+      }
+      return v;
+    }
+
+    function updateItemField(index, field, value) {
+      setItems(prev => {
+        const copy = [...prev];
+        copy[index] = { ...copy[index], [field]: field === "quantity" ? (Number(value) || 0) : value };
+        return copy;
+      });
+    }
+
+    function removeItem(index) {
+      setItems(prev => prev.filter((_, i) => i !== index));
+    }
+
+    return (
+      React.createElement("div", { className: "app" },
+        React.createElement("h1", null, "Barcode-inventarisatie"),
+        React.createElement("div", { className: "controls" },
+          React.createElement("button", {
+            className: "btn btn-green",
+            onClick: () => { if (scanning) { stopCamera(); } else { startCamera(); } }
+          }, scanning ? "Stop camera" : "Start camera"),
+          React.createElement("button", { className: "btn btn-indigo", onClick: downloadCSV }, "Download CSV"),
+          React.createElement("div", { className: "meta" }, supported === null ? "Controleer ondersteuning..." : supported ? "BarcodeDetector: ondersteund" : "BarcodeDetector: niet ondersteund")
+        ),
+        React.createElement("div", { className: "camera-wrap" },
+          React.createElement("video", { ref: videoRef, playsInline: true }),
+          React.createElement("canvas", { ref: canvasRef, style: { display: "none" } }),
+          React.createElement("div", { className: "overlay" },
+            React.createElement("div", { className: "pill" }, scanning ? "Camera actief — richt op een barcode" : "Klik op Start camera om te scannen")
+          )
+        ),
+        React.createElement("div", { className: "input-row" },
+          React.createElement("input", { type: "text", value: lastBarcode, onChange: (e) => setLastBarcode(e.target.value), placeholder: "Barcode (manueel of na scan)" }),
+          React.createElement("input", { id: "articleIdInput", type: "text", value: articleId, onChange: (e) => setArticleId(e.target.value), placeholder: "Artikel ID" }),
+          React.createElement("input", { type: "number", value: quantity, onChange: (e) => setQuantity(Number(e.target.value)), min: "1" }),
+          React.createElement("div", { className: "confirm-row" },
+            React.createElement("button", { className: "btn btn-ghost", onClick: confirmItem }, "Bevestig item"),
+            React.createElement("button", { className: "btn btn-ghost", onClick: () => { setLastBarcode(''); setArticleId(''); setQuantity(1); setMessage(''); } }, "Reset")
+          )
+        ),
+        message && React.createElement("div", { className: "message" }, message),
+        React.createElement("table", null,
+          React.createElement("thead", null,
+            React.createElement("tr", null,
+              React.createElement("th", null, "Tijd"),
+              React.createElement("th", null, "Barcode"),
+              React.createElement("th", null, "Artikel ID"),
+              React.createElement("th", null, "Aantal"),
+              React.createElement("th", null, "Acties")
+            )
+          ),
+          React.createElement("tbody", null,
+            items.length === 0 ? React.createElement("tr", null, React.createElement("td", { colSpan: 5, className: "small-muted" }, "Geen items")) : items.map((it, idx) =>
+              React.createElement("tr", { key: idx },
+                React.createElement("td", null, new Date(it.time).toLocaleString()),
+                React.createElement("td", null, it.barcode),
+                React.createElement("td", null,
+                  React.createElement("input", {
+                    value: it.articleId,
+                    onChange: (e) => updateItemField(idx, "articleId", e.target.value),
+                    placeholder: "Artikel ID",
+                    style: { width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.03)", background: "transparent", color: "inherit" }
+                  })
+                ),
+                React.createElement("td", null,
+                  React.createElement("input", {
+                    type: "number",
+                    value: it.quantity,
+                    onChange: (e) => updateItemField(idx, "quantity", e.target.value),
+                    style: { width: 90, padding: "6px 8px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.03)", background: "transparent", color: "inherit" }
+                  })
+                ),
+                React.createElement("td", null,
+                  React.createElement("button", { className: "action-btn remove", onClick: () => removeItem(idx) }, "Verwijder")
+                )
+              )
+            )
+          )
+        )
+      )
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(BarcodeInventory));
+  </script>
+</body>
+</html>
