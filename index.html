@@ -4,88 +4,166 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Barcode Inventarisatie</title>
+<!-- React en ReactDOM via CDN -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<!-- html5-qrcode library -->
 <script src="https://unpkg.com/html5-qrcode/minified/html5-qrcode.min.js"></script>
 <style>
-body{font-family:sans-serif;background:#f0f4f8;padding:16px;}
-#reader{width:100%;max-width:500px;margin:0 auto;}
-.input-row{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;}
-input,button{padding:6px; border-radius:4px; border:1px solid #ccc;}
-table{margin-top:12px;width:100%;border-collapse:collapse;}
-th,td{border:1px solid #ccc;padding:6px;text-align:left;}
+body{margin:0;font-family:sans-serif;background:#0f1724;color:#e6eef8;padding:16px;}
+h1{margin-bottom:16px}
+.app{max-width:900px;margin:0 auto;padding:16px;background:linear-gradient(180deg,#071025,#041122);border-radius:10px;}
+button{padding:8px 12px;border-radius:6px;border:none;cursor:pointer}
+.btn-green{background:#10b981;color:white;}
+.btn-indigo{background:#7c3aed;color:white;}
+.controls{display:flex;gap:10px;align-items:center;margin-bottom:10px}
+.meta{margin-left:auto;color:#94a3b8;font-size:12px}
+.camera-wrap{position:relative;width:100%;height:400px;background:#000;border-radius:8px;overflow:hidden;margin-bottom:12px}
+video{width:100%;height:100%;object-fit:cover;}
+canvas.overlay{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;}
+.input-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+input[type=text],input[type=number]{padding:6px 8px;border-radius:6px;border:1px solid #94a3b8;background:transparent;color:#fff}
+table{width:100%;border-collapse:collapse;margin-top:12px}
+th,td{padding:8px;border-bottom:1px solid #94a3b8;font-size:13px}
+th{color:#94a3b8;font-weight:600}
+.remove{background:#ef4444;color:white;padding:4px 8px;border-radius:6px;border:none;cursor:pointer}
+.message{margin-bottom:8px;color:#94a3b8;font-size:13px}
 </style>
 </head>
 <body>
-
-<h1>Barcode Inventarisatie (Android-ready)</h1>
-
-<div id="reader"></div>
-
-<div class="input-row">
-<input id="barcode" placeholder="Barcode" readonly>
-<input id="articleId" placeholder="Artikel ID">
-<input id="quantity" type="number" value="1" min="1">
-<button id="confirmBtn">Bevestig item</button>
-<button id="downloadBtn">Download CSV</button>
-</div>
-
-<table id="itemsTable">
-<thead>
-<tr><th>Tijd</th><th>Barcode</th><th>Artikel ID</th><th>Aantal</th></tr>
-</thead>
-<tbody></tbody>
-</table>
-
+<div id="root"></div>
 <script>
-const items=[];
+const { useEffect, useRef, useState } = React;
 
-function updateTable(){
-  const tbody=document.querySelector("#itemsTable tbody");
-  tbody.innerHTML="";
-  items.forEach(i=>{
-    const tr=document.createElement("tr");
-    tr.innerHTML=`<td>${new Date(i.time).toLocaleString()}</td><td>${i.barcode}</td><td>${i.articleId}</td><td>${i.quantity}</td>`;
-    tbody.appendChild(tr);
-  });
+function BarcodeInventory() {
+  const videoRef = useRef(null);
+  const overlayRef = useRef(null);
+  const [scanning,setScanning] = useState(false);
+  const [lastBarcode,setLastBarcode] = useState("");
+  const [articleId,setArticleId] = useState("");
+  const [quantity,setQuantity] = useState(1);
+  const [items,setItems] = useState([]);
+  const [message,setMessage] = useState("");
+  const html5QrRef = useRef(null);
+
+  useEffect(()=>{
+    startCamera();
+    return ()=>stopCamera();
+  },[]);
+
+  function startCamera(){
+    if(scanning)return;
+    const video = videoRef.current;
+    if(!video) return;
+    setScanning(true);
+
+    // html5-qrcode setup
+    html5QrRef.current = new Html5Qrcode(/* elementId unused */ "reader", false);
+    html5QrRef.current.start(
+      {facingMode:"environment"},
+      {fps:10, qrbox:250, experimentalFeatures:{useBarCodeDetectorIfSupported:true}},
+      decodedText=>{
+        setLastBarcode(decodedText);
+        stopCamera();
+      },
+      errorMessage=>{
+        // ignore scanning errors
+      }
+    ).catch(err=>{
+      console.error("Camera starten mislukt:", err);
+      setMessage("Camera starten mislukt: "+err);
+    });
+    // start draw overlay loop
+    requestAnimationFrame(drawOverlay);
+  }
+
+  function stopCamera(){
+    setScanning(false);
+    if(html5QrRef.current){
+      html5QrRef.current.stop().catch(()=>{});
+      html5QrRef.current=null;
+    }
+  }
+
+  function drawOverlay(){
+    const overlay = overlayRef.current;
+    const video = videoRef.current;
+    if(!overlay || !video) return;
+    const ctx = overlay.getContext("2d");
+    overlay.width = video.videoWidth || video.clientWidth || 640;
+    overlay.height = video.videoHeight || video.clientHeight || 480;
+    ctx.clearRect(0,0,overlay.width,overlay.height);
+    ctx.strokeStyle="rgba(255,50,50,0.9)";
+    ctx.lineWidth=3;
+    ctx.beginPath();
+    ctx.moveTo(0, overlay.height*0.5);
+    ctx.lineTo(overlay.width, overlay.height*0.5);
+    ctx.stroke();
+    if(scanning) requestAnimationFrame(drawOverlay);
+  }
+
+  function confirmItem(){
+    if(!lastBarcode){setMessage("Geen barcode om te bevestigen.");return;}
+    const q = Number(quantity)||1;
+    const item = {time:new Date().toISOString(), barcode:lastBarcode, articleId:(articleId||"").trim(), quantity:q};
+    setItems(prev=>[item,...prev]);
+    setLastBarcode(""); setArticleId(""); setQuantity(1);
+    setMessage("Item toegevoegd");
+    setTimeout(startCamera, 300);
+  }
+
+  function downloadCSV(){
+    if(items.length===0){setMessage("Geen items om te downloaden.");return;}
+    let filename = prompt("Bestandsnaam","inventaris");
+    if(!filename) filename="inventaris";
+    if(!filename.toLowerCase().endsWith(".csv")) filename+=".csv";
+    const header="time,barcode,articleId,quantity\n";
+    const rows = items.map(i=>`${i.time},${i.barcode},${i.articleId},${i.quantity}`).join("\n");
+    const blob = new Blob([header+rows],{type:"text/csv;charset=utf-8"});
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=filename; a.click(); URL.revokeObjectURL(a.href);
+    setMessage(`CSV gedownload (${filename})`);
+  }
+
+  function removeItem(i){setItems(prev=>prev.filter((_,idx)=>idx!==i))}
+  function updateItemField(i,f,v){setItems(prev=>{const c=[...prev];c[i]={...c[i],[f]:f==="quantity"?Number(v)||0:v};return c;})}
+
+  return React.createElement("div",{className:"app"},
+    React.createElement("h1",null,"Barcode Inventarisatie"),
+    React.createElement("div",{className:"controls"},
+      React.createElement("button",{onClick:()=>scanning?stopCamera():startCamera(),className:"btn-green"},scanning?"Stop camera":"Start camera"),
+      React.createElement("button",{onClick:downloadCSV,className:"btn-indigo"},"Download CSV"),
+      React.createElement("div",{className:"meta"},scanning?"Camera actief":"Camera gestopt")
+    ),
+    React.createElement("div",{className:"camera-wrap"},
+      React.createElement("video",{ref:videoRef,autoPlay:true,muted:true,playsInline:true}),
+      React.createElement("canvas",{ref:overlayRef,className:"overlay"})
+    ),
+    React.createElement("div",{className:"input-row"},
+      React.createElement("input",{type:"text",value:lastBarcode,onChange:e=>setLastBarcode(e.target.value),placeholder:"Barcode (manueel of scan)"}),
+      React.createElement("input",{id:"articleIdInput",type:"text",value:articleId,onChange:e=>setArticleId(e.target.value),placeholder:"Artikel ID"}),
+      React.createElement("input",{type:"number",value:quantity,onChange:e=>setQuantity(Number(e.target.value)),min:1}),
+      React.createElement("button",{onClick:confirmItem},"Bevestig item")
+    ),
+    message && React.createElement("div",{className:"message"},message),
+    React.createElement("table",null,
+      React.createElement("thead",null,
+        React.createElement("tr",null,["Tijd","Barcode","Artikel ID","Aantal","Acties"].map(h=>React.createElement("th",{key:h},h)))
+      ),
+      React.createElement("tbody",null,
+        items.length===0?React.createElement("tr",null,React.createElement("td",{colSpan:5},"Geen items")):
+        items.map((it,i)=>React.createElement("tr",{key:i},
+          React.createElement("td",null,new Date(it.time).toLocaleString()),
+          React.createElement("td",null,it.barcode),
+          React.createElement("td",null,React.createElement("input",{value:it.articleId,onChange:e=>updateItemField(i,"articleId",e.target.value)})),
+          React.createElement("td",null,React.createElement("input",{type:"number",value:it.quantity,onChange:e=>updateItemField(i,"quantity",e.target.value)})),
+          React.createElement("td",null,React.createElement("button",{className:"remove",onClick:()=>removeItem(i)},"Verwijder"))
+        ))
+      )
+    )
+  );
 }
 
-document.getElementById("confirmBtn").addEventListener("click",()=>{
-  const bc=document.getElementById("barcode").value;
-  const aid=document.getElementById("articleId").value;
-  const q=document.getElementById("quantity").value||1;
-  if(!bc){alert("Geen barcode");return;}
-  items.push({time:new Date().toISOString(),barcode:bc,articleId:aid,quantity:q});
-  updateTable();
-  document.getElementById("barcode").value="";
-  document.getElementById("articleId").value="";
-  document.getElementById("quantity").value=1;
-});
-
-document.getElementById("downloadBtn").addEventListener("click",()=>{
-  if(items.length===0){alert("Geen items");return;}
-  let filename=prompt("Bestandsnaam","inventaris");
-  if(!filename) filename="inventaris";
-  if(!filename.endsWith(".csv")) filename+=".csv";
-  const header="time,barcode,articleId,quantity\n";
-  const rows=items.map(i=>`${i.time},${i.barcode},${i.articleId},${i.quantity}`).join("\n");
-  const blob=new Blob([header+rows],{type:"text/csv;charset=utf-8"});
-  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=filename; a.click(); URL.revokeObjectURL(a.href);
-});
-
-// html5-qrcode setup
-const html5QrcodeScanner=new Html5Qrcode("reader");
-const config={fps:10,qrbox:250};
-
-html5QrcodeScanner.start(
-  { facingMode:"environment" },
-  config,
-  decodedText=>{
-    document.getElementById("barcode").value=decodedText;
-  },
-  errorMessage=>{
-    //console.log("scan error:", errorMessage);
-  }
-).catch(err=>console.error(err));
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(BarcodeInventory));
 </script>
-
 </body>
 </html>
