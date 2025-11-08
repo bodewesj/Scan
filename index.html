@@ -4,20 +4,19 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Barcode Inventarisatie</title>
-<!-- React en ReactDOM via CDN -->
 <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-<!-- html5-qrcode library -->
-<script src="https://unpkg.com/html5-qrcode/minified/html5-qrcode.min.js"></script>
 <style>
 body{margin:0;font-family:sans-serif;background:#0f1724;color:#e6eef8;padding:16px;}
-h1{margin-bottom:16px}
 .app{max-width:900px;margin:0 auto;padding:16px;background:linear-gradient(180deg,#071025,#041122);border-radius:10px;}
 button{padding:8px 12px;border-radius:6px;border:none;cursor:pointer}
 .btn-green{background:#10b981;color:white;}
 .btn-indigo{background:#7c3aed;color:white;}
 .controls{display:flex;gap:10px;align-items:center;margin-bottom:10px}
 .meta{margin-left:auto;color:#94a3b8;font-size:12px}
+.camera-wrap{position:relative;width:100%;height:400px;background:#000;border-radius:8px;overflow:hidden;margin-bottom:12px}
+video{width:100%;height:100%;object-fit:cover;}
+canvas.overlay{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;}
 .input-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
 input[type=text],input[type=number]{padding:6px 8px;border-radius:6px;border:1px solid #94a3b8;background:transparent;color:#fff}
 table{width:100%;border-collapse:collapse;margin-top:12px}
@@ -25,7 +24,6 @@ th,td{padding:8px;border-bottom:1px solid #94a3b8;font-size:13px}
 th{color:#94a3b8;font-weight:600}
 .remove{background:#ef4444;color:white;padding:4px 8px;border-radius:6px;border:none;cursor:pointer}
 .message{margin-bottom:8px;color:#94a3b8;font-size:13px}
-#reader{width:100%;max-width:640px;margin:0 auto 12px auto;}
 </style>
 </head>
 <body>
@@ -34,60 +32,92 @@ th{color:#94a3b8;font-weight:600}
 const { useEffect, useRef, useState } = React;
 
 function BarcodeInventory() {
-  const [lastBarcode,setLastBarcode] = useState("");
-  const [articleId,setArticleId] = useState("");
-  const [quantity,setQuantity] = useState(1);
-  const [items,setItems] = useState([]);
-  const [message,setMessage] = useState("");
-  const html5QrRef = useRef(null);
-  const [scanning,setScanning] = useState(false);
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [scanning, setScanning] = useState(false);
+  const [lastBarcode, setLastBarcode] = useState("");
+  const [articleId, setArticleId] = useState("");
+  const [quantity, setQuantity] = useState(1);
+  const [items, setItems] = useState([]);
+  const [message, setMessage] = useState("");
+  const detectorRef = useRef(null);
+  const rafRef = useRef(null);
+  const streamRef = useRef(null);
 
-  useEffect(()=>{
-    startCamera();
-    return ()=>stopCamera();
-  },[]);
+  useEffect(() => {
+    if (window.BarcodeDetector) {
+      const formats = ["ean_13","ean_8","code_128","code_39","qr_code","upc_e","upc_a","itf"];
+      try { detectorRef.current = new BarcodeDetector({formats}); } 
+      catch(e){ detectorRef.current = new BarcodeDetector(); }
+    } else {
+      setMessage("BarcodeDetector niet ondersteund op dit apparaat.");
+    }
+    return () => stopCamera();
+  }, []);
 
-  function startCamera(){
+  function startCamera() {
     if(scanning) return;
-    setScanning(true);
-    html5QrRef.current = new Html5Qrcode("reader", false);
-    html5QrRef.current.start(
-      { facingMode:"environment" },
-      { fps:10, qrbox:250 },
-      decodedText=>{
-        setLastBarcode(decodedText);
-        stopCamera();
-      },
-      errorMessage=>{
-        // ignore minor scan errors
-      }
-    ).catch(err=>{
-      console.error("Camera starten mislukt:", err);
-      setMessage("Camera starten mislukt: "+err);
-      setScanning(false);
-    });
+    setMessage("");
+    navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"},audio:false})
+      .then(stream => {
+        streamRef.current = stream;
+        if(videoRef.current){ videoRef.current.srcObject = stream; videoRef.current.setAttribute("playsinline",true); videoRef.current.play();}
+        setScanning(true);
+        if(detectorRef.current) tickDetect();
+      })
+      .catch(err => setMessage("Kon camera niet starten: "+err.message));
   }
 
-  function stopCamera(){
+  function stopCamera() {
     setScanning(false);
-    if(html5QrRef.current){
-      html5QrRef.current.stop().catch(()=>{});
-      html5QrRef.current=null;
-    }
+    if(rafRef.current) cancelAnimationFrame(rafRef.current);
+    if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
+  }
+
+  async function tickDetect() {
+    if(!videoRef.current || !detectorRef.current) return;
+    try{
+      const video = videoRef.current;
+      if(video.readyState !== HTMLMediaElement.HAVE_ENOUGH_DATA){
+        rafRef.current = requestAnimationFrame(tickDetect);
+        return;
+      }
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext("2d");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video,0,0,canvas.width,canvas.height);
+      // rode scanlijn
+      ctx.strokeStyle="red";
+      ctx.lineWidth=3;
+      ctx.beginPath();
+      ctx.moveTo(0,canvas.height*0.5);
+      ctx.lineTo(canvas.width,canvas.height*0.5);
+      ctx.stroke();
+      const barcodes = await detectorRef.current.detect(canvas);
+      if(barcodes.length){
+        const raw = barcodes[0].rawValue || "";
+        if(raw && raw!==lastBarcode){
+          setLastBarcode(raw);
+          setQuantity(1);
+          setMessage(`Gescand: ${raw}`);
+          stopCamera();
+        }
+      }
+    } catch(e){ console.error(e); }
+    rafRef.current = requestAnimationFrame(tickDetect);
   }
 
   function confirmItem(){
-    if(!lastBarcode){setMessage("Geen barcode om te bevestigen.");return;}
+    if(!lastBarcode) return;
     const q = Number(quantity)||1;
-    const item = {time:new Date().toISOString(), barcode:lastBarcode, articleId:(articleId||"").trim(), quantity:q};
-    setItems(prev=>[item,...prev]);
+    setItems(prev => [...prev,{barcode:lastBarcode,articleId,quantity:q,time:new Date().toISOString()}]);
     setLastBarcode(""); setArticleId(""); setQuantity(1);
-    setMessage("Item toegevoegd");
-    setTimeout(startCamera, 300);
+    if(detectorRef.current) startCamera();
   }
 
   function downloadCSV(){
-    if(items.length===0){setMessage("Geen items om te downloaden.");return;}
+    if(items.length===0){setMessage("Geen items"); return;}
     let filename = prompt("Bestandsnaam","inventaris");
     if(!filename) filename="inventaris";
     if(!filename.toLowerCase().endsWith(".csv")) filename+=".csv";
@@ -95,39 +125,35 @@ function BarcodeInventory() {
     const rows = items.map(i=>`${i.time},${i.barcode},${i.articleId},${i.quantity}`).join("\n");
     const blob = new Blob([header+rows],{type:"text/csv;charset=utf-8"});
     const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=filename; a.click(); URL.revokeObjectURL(a.href);
-    setMessage(`CSV gedownload (${filename})`);
   }
-
-  function removeItem(i){setItems(prev=>prev.filter((_,idx)=>idx!==i))}
-  function updateItemField(i,f,v){setItems(prev=>{const c=[...prev];c[i]={...c[i],[f]:f==="quantity"?Number(v)||0:v};return c;})}
 
   return React.createElement("div",{className:"app"},
     React.createElement("h1",null,"Barcode Inventarisatie"),
     React.createElement("div",{className:"controls"},
-      React.createElement("button",{onClick:()=>scanning?stopCamera():startCamera(),className:"btn-green"},scanning?"Stop camera":"Start camera"),
-      React.createElement("button",{onClick:downloadCSV,className:"btn-indigo"},"Download CSV"),
-      React.createElement("div",{className:"meta"},scanning?"Camera actief":"Camera gestopt")
+      React.createElement("button",{onClick:startCamera,className:"btn-green"},"Start camera"),
+      React.createElement("button",{onClick:downloadCSV,className:"btn-indigo"},"Download CSV")
     ),
-    React.createElement("div",{id:"reader"}),
+    React.createElement("div",{className:"camera-wrap"},
+      React.createElement("video",{ref:videoRef,autoPlay:true,muted:true,playsInline:true}),
+      React.createElement("canvas",{ref:canvasRef,className:"overlay"})
+    ),
     React.createElement("div",{className:"input-row"},
-      React.createElement("input",{type:"text",value:lastBarcode,onChange:e=>setLastBarcode(e.target.value),placeholder:"Barcode (manueel of scan)"}),
+      React.createElement("input",{type:"text",value:lastBarcode,onChange:e=>setLastBarcode(e.target.value),placeholder:"Barcode"}),
       React.createElement("input",{type:"text",value:articleId,onChange:e=>setArticleId(e.target.value),placeholder:"Artikel ID"}),
-      React.createElement("input",{type:"number",value:quantity,onChange:e=>setQuantity(Number(e.target.value)),min:1}),
+      React.createElement("input",{type:"number",value:quantity,onChange:e=>setQuantity(e.target.value),min:1}),
       React.createElement("button",{onClick:confirmItem},"Bevestig item")
     ),
     message && React.createElement("div",{className:"message"},message),
     React.createElement("table",null,
       React.createElement("thead",null,
-        React.createElement("tr",null,["Tijd","Barcode","Artikel ID","Aantal","Acties"].map(h=>React.createElement("th",{key:h},h)))
+        React.createElement("tr",null,["Tijd","Barcode","Artikel ID","Aantal"].map(h=>React.createElement("th",{key:h},h)))
       ),
       React.createElement("tbody",null,
-        items.length===0?React.createElement("tr",null,React.createElement("td",{colSpan:5},"Geen items")):
-        items.map((it,i)=>React.createElement("tr",{key:i},
-          React.createElement("td",null,new Date(it.time).toLocaleString()),
-          React.createElement("td",null,it.barcode),
-          React.createElement("td",null,React.createElement("input",{value:it.articleId,onChange:e=>updateItemField(i,"articleId",e.target.value)})),
-          React.createElement("td",null,React.createElement("input",{type:"number",value:it.quantity,onChange:e=>updateItemField(i,"quantity",e.target.value)})),
-          React.createElement("td",null,React.createElement("button",{className:"remove",onClick:()=>removeItem(i)},"Verwijder"))
+        items.map((i,idx)=>React.createElement("tr",{key:idx},
+          React.createElement("td",null,new Date(i.time).toLocaleString()),
+          React.createElement("td",null,i.barcode),
+          React.createElement("td",null,i.articleId),
+          React.createElement("td",null,i.quantity)
         ))
       )
     )
